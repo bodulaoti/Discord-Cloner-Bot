@@ -1,44 +1,20 @@
 import json
 import base64
 from datetime import datetime, timezone
+import os
 from typing import Any
 
 import discord
-from supabase import create_client, Client
-from dotenv import load_dotenv
-import os
 
-load_dotenv()
-
-# Conectare la Supabase (lazily initialized)
-_supabase_client = None
-
-def get_supabase_client():
-    global _supabase_client
-    if _supabase_client is None:
-        SUPABASE_URL = os.getenv("SUPABASE_URL")
-        SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-        
-        print(f"DEBUG SUPABASE_URL: {'Setat' if SUPABASE_URL else 'Lipseste'}")
-        print(f"DEBUG SUPABASE_KEY: {'Setat' if SUPABASE_KEY else 'Lipseste'}")
-        
-        if not SUPABASE_URL:
-            raise SystemExit("EROARE: SUPABASE_URL lipsește! Adaugă-l în Render Environment Variables!")
-        if not SUPABASE_KEY:
-            raise SystemExit("EROARE: SUPABASE_KEY lipsește! Adaugă-l în Render Environment Variables!")
-        
-        _supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    return _supabase_client
+BACKUPS_DIR = "saves"
+os.makedirs(BACKUPS_DIR, exist_ok=True)
 
 
 async def save_guild(guild: discord.Guild, save_name: str) -> dict:
-    print("[DEBUG] Începem salvare...")
     safe_name = "".join(c for c in save_name if c.isalnum() or c in ("-", "_")).strip()
-    print(f"[DEBUG] Nume sigur: {safe_name}")
     if not safe_name:
         raise ValueError("Numele fișierului nu este valid!")
 
-    print("[DEBUG] Colectăm roluri...")
     roles = [
         {
             "name": role.name,
@@ -53,35 +29,26 @@ async def save_guild(guild: discord.Guild, save_name: str) -> dict:
         for role in sorted(guild.roles, key=lambda r: r.position)
         if not role.is_default() and not role.managed
     ]
-    print(f"[DEBUG] {len(roles)} roluri colectate")
 
-    print("[DEBUG] Colectăm categorii...")
     categories = [
         _serialize_channel(category)
         for category in sorted(guild.categories, key=lambda c: c.position)
     ]
-    print(f"[DEBUG] {len(categories)} categorii colectate")
 
-    print("[DEBUG] Colectăm canale...")
     channels = [
         _serialize_channel(channel)
         for channel in sorted(guild.channels, key=lambda c: c.position)
         if not isinstance(channel, discord.CategoryChannel)
     ]
-    print(f"[DEBUG] {len(channels)} canale colectate")
 
     icon_base64 = None
     if guild.icon:
-        print("[DEBUG] Colectăm iconiță...")
         try:
             icon_bytes = await guild.icon.read()
             icon_base64 = base64.b64encode(icon_bytes).decode("utf-8")
-            print("[DEBUG] Iconiță colectată")
-        except Exception as e:
-            print(f"[DEBUG] Eroare iconiță: {e}")
+        except Exception:
             icon_base64 = None
 
-    print("[DEBUG] Construim payload...")
     payload = {
         "save_name": safe_name,
         "saved_at": datetime.now(timezone.utc).isoformat(),
@@ -94,49 +61,39 @@ async def save_guild(guild: discord.Guild, save_name: str) -> dict:
         "categories": categories,
         "channels": channels,
     }
-    print(f"[DEBUG] Payload gata, lungime: {len(str(payload))}")
 
-    # Salvează în Supabase
-    print("[DEBUG] Începem salvare în Supabase...")
-    try:
-        supabase = get_supabase_client()
-        print("[DEBUG] Am luat clientul Supabase")
-        # Dacă există deja backup-ul cu același nume, îl actualizăm; altfel, îl creăm
-        print("[DEBUG] Verificăm dacă există backup...")
-        existing = supabase.table("backups").select("id").eq("save_name", safe_name).execute()
-        print(f"[DEBUG] Rezultat verificare: {existing}")
-        if existing.data:
-            print("[DEBUG] Actualizăm backup existent...")
-            supabase.table("backups").update({"data": payload}).eq("save_name", safe_name).execute()
-            print("[DEBUG] Backup actualizat")
-        else:
-            print("[DEBUG] Creăm backup nou...")
-            supabase.table("backups").insert({"save_name": safe_name, "data": payload}).execute()
-            print("[DEBUG] Backup creat")
-        return {"save_name": safe_name, "source_guild": payload["source_guild"]}
-    except Exception as e:
-        print(f"[DEBUG] Eroare la salvare: {e}")
-        import traceback
-        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
-        raise ValueError(f"Eroare la salvare în Supabase: {e}")
+    filepath = os.path.join(BACKUPS_DIR, f"{safe_name}.json")
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    return {"save_name": safe_name, "source_guild": payload["source_guild"]}
 
 
 def load_save_data(save_name: str) -> dict:
     safe_name = "".join(c for c in save_name if c.isalnum() or c in ("-", "_")).strip()
-    supabase = get_supabase_client()
-    response = supabase.table("backups").select("data").eq("save_name", safe_name).execute()
-    if not response.data:
+    filepath = os.path.join(BACKUPS_DIR, f"{safe_name}.json")
+    if not os.path.exists(filepath):
         raise FileNotFoundError(f"Backup-ul `{safe_name}` nu există!")
-    return response.data[0]["data"]
+    with open(filepath, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def list_saves() -> list[str]:
-    supabase = get_supabase_client()
-    response = supabase.table("backups").select("save_name, created_at").order("created_at", desc=True).execute()
-    return [f"- `{item['save_name']}` ({item['created_at'][:16]})" for item in response.data]
+    saves = []
+    for filename in os.listdir(BACKUPS_DIR):
+        if filename.endswith(".json"):
+            save_name = filename[:-5]
+            filepath = os.path.join(BACKUPS_DIR, filename)
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    saved_at = data.get("saved_at", "?")[:16]
+                    saves.append(f"- `{save_name}` ({saved_at})")
+            except Exception:
+                saves.append(f"- `{save_name}`")
+    return sorted(saves, reverse=True)
 
 
-# Restul funcțiilor (pentru serializare, wipe, apply) rămân la fel
 def _overwrite_to_dict(overwrite: discord.PermissionOverwrite) -> dict[str, bool | None]:
     data: dict[str, bool | None] = {}
     for name, value in overwrite:
@@ -241,14 +198,14 @@ async def apply_save_to_guild(guild: discord.Guild, data: dict[str, Any]) -> dic
     source_guild = data.get("source_guild", {})
     new_name = source_guild.get("name")
     icon_base64 = source_guild.get("icon")
-    
+
     icon_bytes = None
     if icon_base64:
         try:
             icon_bytes = base64.b64decode(icon_base64)
         except Exception:
             icon_bytes = None
-    
+
     if new_name and new_name != guild.name:
         try:
             await guild.edit(name=new_name, icon=icon_bytes)

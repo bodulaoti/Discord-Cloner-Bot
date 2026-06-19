@@ -6,7 +6,7 @@ import sys
 
 import discord
 from discord.ext import commands
-from dotenv import load_dotenv, set_key, find_dotenv
+from dotenv import load_dotenv
 
 from keep_alive import keep_alive
 from server_backup import apply_save_to_guild, load_save_data, save_guild, wipe_guild, list_saves
@@ -14,13 +14,10 @@ from server_backup import apply_save_to_guild, load_save_data, save_guild, wipe_
 
 load_dotenv()
 
-# Preluăm tokenul contului tău din .env
 USER_TOKEN = os.getenv("DISCORD_USER_TOKEN")
-
 if not USER_TOKEN:
     raise SystemExit("❌ Eroare: Lipseste DISCORD_USER_TOKEN in fisierul .env!")
 
-# Configurăm self-botul
 bot = commands.Bot(
     command_prefix="!",
     self_bot=True
@@ -39,10 +36,10 @@ async def on_ready() -> None:
     print(f"📍 Sunt pe {len(bot.guilds)} servere!")
     print("\n📜 Comenzi disponibile:")
     print("  !ping                 - Verifică dacă botul răspunde")
-    print("  !save [nume]          - Salvează serverul curent în Supabase")
-    print("  !load [nume]          - Încarcă un backup din Supabase (trebuie să fii admin)")
+    print("  !save [nume]          - Salvează structura serverului curent")
+    print("  !load [nume]          - Încarcă un backup (trebuie să fii admin)")
+    print("  !saves                - Vezi lista backup-urilor")
     print("  !clone [invitație]    - Clonează un server dintr-o invitație")
-    print("  !saves                - Vezi lista backup-urilor din Supabase")
     print("  !nuke                 - Șterge tot de pe un server (trebuie să fii admin)")
     print("  !token [NOU_TOKEN]    - Schimbă tokenul contului (doar tu)")
     print("  !restart              - Repornește botul (doar tu)")
@@ -84,12 +81,12 @@ async def save_command(ctx: commands.Context, save_name: str) -> None:
         await ctx.send("⚠️ Folosește: `!save nume_backup`")
         return
 
-    status = await ctx.send("📦 Salvez structura serverului în Supabase...")
+    status = await ctx.send("📦 Salvez structura serverului...")
     try:
         result = await save_guild(ctx.guild, save_name.strip())
         await status.edit(
             content=(
-                f"✅ Serverul **{ctx.guild.name}** a fost salvat cu succes în Supabase!\n"
+                f"✅ Serverul **{ctx.guild.name}** a fost salvat cu succes!\n"
                 f"📁 Nume backup: `{result['save_name']}`\n"
                 f"👥 Roluri salvate: {len([r for r in ctx.guild.roles if not r.is_default() and not r.managed])}\n"
                 f"📂 Categorii: {len(ctx.guild.categories)}\n"
@@ -182,11 +179,11 @@ async def load_command(ctx: commands.Context, filename: str) -> None:
 @bot.command(name="saves")
 async def list_saves_command(ctx: commands.Context) -> None:
     try:
-        saves = list_saves()
-        if not saves:
+        saves_list = list_saves()
+        if not saves_list:
             await ctx.send("⚠️ Nu există niciun backup încă! Folosește `!save nume`!")
             return
-        await ctx.send(f"💾 Backup-uri disponibile în Supabase:\n" + "\n".join(saves))
+        await ctx.send(f"💾 Backup-uri disponibile:\n" + "\n".join(saves_list))
     except Exception as e:
         await ctx.send(f"❌ Eroare la listare: {e}")
 
@@ -250,11 +247,27 @@ async def set_token_command(ctx: commands.Context, *, new_token: str) -> None:
 
     status = await ctx.send("🔐 Actualizez tokenul...")
     try:
-        dotenv_path = find_dotenv()
-        if not dotenv_path:
-            dotenv_path = ".env"
+        dotenv_path = ".env"
+        if not os.path.exists(dotenv_path):
             open(dotenv_path, "a", encoding="utf-8").close()
-        set_key(dotenv_path, "DISCORD_USER_TOKEN", new_token.strip())
+        
+        # Read existing env file
+        env_vars = {}
+        if os.path.exists(dotenv_path):
+            with open(dotenv_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if "=" in line and not line.startswith("#"):
+                        key, value = line.split("=", 1)
+                        env_vars[key.strip()] = value.strip()
+        
+        env_vars["DISCORD_USER_TOKEN"] = new_token.strip()
+        
+        # Write back
+        with open(dotenv_path, "w", encoding="utf-8") as f:
+            for key, value in env_vars.items():
+                f.write(f"{key}={value}\n")
+        
         await status.edit(content="✅ Tokenul actualizat! Folosește `!restart` pentru a aplica schimbările!")
     except Exception as e:
         print(f"❌ Eroare la actualizarea tokenului: {e}")
@@ -313,7 +326,7 @@ async def clone_command(ctx: commands.Context, invite_link: str) -> None:
 
         await status.edit(
             content=(
-                f"✅ Serverul **{target_guild.name}** a fost salvat cu succes în Supabase!\n"
+                f"✅ Serverul **{target_guild.name}** a fost salvat cu succes!\n"
                 f"📁 Nume backup: `{result['save_name']}`\n"
                 f"👥 Roluri salvate: {len([r for r in target_guild.roles if not r.is_default() and not r.managed])}\n"
                 f"📂 Categorii: {len(target_guild.categories)}\n"
