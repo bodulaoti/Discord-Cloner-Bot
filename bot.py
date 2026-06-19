@@ -331,13 +331,19 @@ async def clone_command(ctx: commands.Context, invite_link: str) -> None:
         save_name = invite_code
         await status.edit(content=f"📦 Salvez serverul **{target_guild.name}** ca `{save_name}`...")
         file_path = await save_guild(target_guild, save_name)
+        # Trimitem fișierul ca attachment
+        file = discord.File(file_path, filename=file_path.name)
 
-        await status.edit(
+        await status.delete()
+        await ctx.send(
             content=(
                 f"✅ Serverul **{target_guild.name}** a fost salvat cu succes!\n"
-                f"📁 Backup: `{file_path.name}`\n"
-                f"🔧 Pentru a-l clona: mergi pe un server gol (unde ești admin) și scrie: `!load {save_name}`"
-            )
+                f"� Roluri salvate: {len([r for r in target_guild.roles if not r.is_default() and not r.managed])}\n"
+                f"📂 Categorii: {len(target_guild.categories)}\n"
+                f"💬 Canale: {len([c for c in target_guild.channels if not isinstance(c, discord.CategoryChannel)])}\n"
+                f"🔧 Pentru a-l clona: mergi pe un server gol (unde ești admin), atașează fișierul și scrie: `!load`"
+            ),
+            file=file
         )
 
     except discord.NotFound:
