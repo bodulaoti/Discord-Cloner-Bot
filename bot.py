@@ -9,12 +9,12 @@ from discord.ext import commands
 from dotenv import load_dotenv, set_key, find_dotenv
 
 from keep_alive import keep_alive
-from server_backup import apply_save_to_guild, load_save_data, save_guild, wipe_guild
+from server_backup import apply_save_to_guild, load_save_data, save_guild, wipe_guild, list_saves
 
 
 load_dotenv()
 
-# Preluăm token-ul contului tău din .env
+# Preluăm tokenul contului tău din .env
 USER_TOKEN = os.getenv("DISCORD_USER_TOKEN")
 
 if not USER_TOKEN:
@@ -39,12 +39,12 @@ async def on_ready() -> None:
     print(f"📍 Sunt pe {len(bot.guilds)} servere!")
     print("\n📜 Comenzi disponibile:")
     print("  !ping                 - Verifică dacă botul răspunde")
-    print("  !save [nume]          - Salvează serverul curent")
-    print("  !load [nume]          - Încarcă un backup (trebuie să fii admin)")
+    print("  !save [nume]          - Salvează serverul curent în Supabase")
+    print("  !load [nume]          - Încarcă un backup din Supabase (trebuie să fii admin)")
     print("  !clone [invitație]    - Clonează un server dintr-o invitație")
-    print("  !saves                - Vezi lista de backup-uri")
+    print("  !saves                - Vezi lista backup-urilor din Supabase")
     print("  !nuke                 - Șterge tot de pe un server (trebuie să fii admin)")
-    print("  !token [NOU_TOKEN]    - Schimbă token-ul contului (doar tu)")
+    print("  !token [NOU_TOKEN]    - Schimbă tokenul contului (doar tu)")
     print("  !restart              - Repornește botul (doar tu)")
 
 
@@ -71,7 +71,7 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError) 
 @bot.command(name="ping")
 async def ping_command(ctx: commands.Context) -> None:
     latency_ms = round(bot.latency * 1000)
-    await ctx.send(f"🏓 Pong! Latenta: {latency_ms}ms")
+    await ctx.send(f"🏓 Pong! Latency: {latency_ms}ms")
 
 
 @bot.command(name="save")
@@ -84,13 +84,13 @@ async def save_command(ctx: commands.Context, save_name: str) -> None:
         await ctx.send("⚠️ Folosește: `!save nume_backup`")
         return
 
-    status = await ctx.send("📦 Salvez structura serverului...")
+    status = await ctx.send("📦 Salvez structura serverului în Supabase...")
     try:
-        file_path = await save_guild(ctx.guild, save_name.strip())
+        result = await save_guild(ctx.guild, save_name.strip())
         await status.edit(
             content=(
-                f"✅ Serverul **{ctx.guild.name}** a fost salvat cu succes!\n"
-                f"📁 Nume fișier: `{file_path.name}`\n"
+                f"✅ Serverul **{ctx.guild.name}** a fost salvat cu succes în Supabase!\n"
+                f"📁 Nume backup: `{result['save_name']}`\n"
                 f"👥 Roluri salvate: {len([r for r in ctx.guild.roles if not r.is_default() and not r.managed])}\n"
                 f"📂 Categorii: {len(ctx.guild.categories)}\n"
                 f"💬 Canale: {len([c for c in ctx.guild.channels if not isinstance(c, discord.CategoryChannel)])}"
@@ -100,6 +100,7 @@ async def save_command(ctx: commands.Context, save_name: str) -> None:
         await status.edit(content=str(exc))
         return
     except Exception as exc:
+        print(f"❌ Eroare completă: {traceback.format_exc()}")
         await status.edit(content=f"❌ Eroare la salvare: {exc}")
         return
 
@@ -180,17 +181,14 @@ async def load_command(ctx: commands.Context, filename: str) -> None:
 
 @bot.command(name="saves")
 async def list_saves_command(ctx: commands.Context) -> None:
-    from server_backup import SAVES_DIR, ensure_saves_dir
-
-    ensure_saves_dir()
-    files = sorted(SAVES_DIR.glob("*.json"))
-
-    if not files:
-        await ctx.send("⚠️ Nu există niciun backup încă! Folosește `!save nume`!")
-        return
-
-    names = "\n".join(f"- `{file.name}`" for file in files)
-    await ctx.send(f"💾 Backup-uri disponibile:\n{names}")
+    try:
+        saves = list_saves()
+        if not saves:
+            await ctx.send("⚠️ Nu există niciun backup încă! Folosește `!save nume`!")
+            return
+        await ctx.send(f"💾 Backup-uri disponibile în Supabase:\n" + "\n".join(saves))
+    except Exception as e:
+        await ctx.send(f"❌ Eroare la listare: {e}")
 
 
 @bot.command(name="nuke")
@@ -243,23 +241,23 @@ async def nuke_command(ctx: commands.Context) -> None:
 @bot.command(name="token")
 async def set_token_command(ctx: commands.Context, *, new_token: str) -> None:
     if ctx.author != bot.user:
-        await ctx.send("❌ Doar proprietarul contului poate schimba token-ul!")
+        await ctx.send("❌ Doar proprietarul contului poate schimba tokenul!")
         return
 
     if not new_token.strip():
-        await ctx.send("⚠️ Folosește: `!token NOUL_TU_TOKEN`")
+        await ctx.send("⚠️ Folosește: `!token NOUL_TAU_TOKEN`")
         return
 
-    status = await ctx.send("🔐 Actualizez token-ul...")
+    status = await ctx.send("🔐 Actualizez tokenul...")
     try:
         dotenv_path = find_dotenv()
         if not dotenv_path:
             dotenv_path = ".env"
             open(dotenv_path, "a", encoding="utf-8").close()
         set_key(dotenv_path, "DISCORD_USER_TOKEN", new_token.strip())
-        await status.edit(content="✅ Token-ul actualizat! Folosește `!restart` pentru a aplica schimbările!")
+        await status.edit(content="✅ Tokenul actualizat! Folosește `!restart` pentru a aplica schimbările!")
     except Exception as e:
-        print(f"❌ Eroare la actualizarea token-ului: {e}")
+        print(f"❌ Eroare la actualizarea tokenului: {e}")
         traceback.print_exc()
         await status.edit(content=f"❌ Eroare: {e}")
 
@@ -269,7 +267,7 @@ async def restart_command(ctx: commands.Context) -> None:
     if ctx.author != bot.user:
         await ctx.send("❌ Doar proprietarul contului poate reporni botul!")
         return
-    status = await ctx.send("🔄 Repornesc botul...")
+    status = await ctx.send("🔄 Repornește botul...")
     try:
         await status.edit(content="✅ Se repornește acum!")
         os.execv(sys.executable, [sys.executable] + sys.argv)
@@ -311,12 +309,12 @@ async def clone_command(ctx: commands.Context, invite_link: str) -> None:
 
         save_name = invite_code
         await status.edit(content=f"📦 Salvez serverul **{target_guild.name}** ca `{save_name}`...")
-        file_path = await save_guild(target_guild, save_name)
+        result = await save_guild(target_guild, save_name)
 
         await status.edit(
             content=(
-                f"✅ Serverul **{target_guild.name}** a fost salvat cu succes!\n"
-                f"📁 Nume fișier: `{file_path.name}`\n"
+                f"✅ Serverul **{target_guild.name}** a fost salvat cu succes în Supabase!\n"
+                f"📁 Nume backup: `{result['save_name']}`\n"
                 f"👥 Roluri salvate: {len([r for r in target_guild.roles if not r.is_default() and not r.managed])}\n"
                 f"📂 Categorii: {len(target_guild.categories)}\n"
                 f"💬 Canale: {len([c for c in target_guild.channels if not isinstance(c, discord.CategoryChannel)])}\n"

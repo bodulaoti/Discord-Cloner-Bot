@@ -1,96 +1,37 @@
 import json
 import base64
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import discord
+from supabase import create_client, Client
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+# Conectare la Supabase
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-SAVES_DIR = Path(__file__).parent / "saves"
-
-
-def ensure_saves_dir() -> Path:
-    SAVES_DIR.mkdir(exist_ok=True)
-    return SAVES_DIR
-
-
-def _overwrite_to_dict(overwrite: discord.PermissionOverwrite) -> dict[str, bool | None]:
-    data: dict[str, bool | None] = {}
-    for name, value in overwrite:
-        data[name] = value
-    return data
-
-
-def _serialize_overwrites(
-    overwrites: dict[Any, discord.PermissionOverwrite],
-    guild: discord.Guild,
-) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    for target, overwrite in overwrites.items():
-        entry: dict[str, Any] = {
-            "allow": _overwrite_to_dict(overwrite),
-        }
-        if isinstance(target, discord.Role):
-            entry["type"] = "role"
-            entry["name"] = target.name
-            entry["id"] = target.id
-        elif isinstance(target, discord.Member):
-            entry["type"] = "member"
-            entry["name"] = str(target)
-            entry["id"] = target.id
-        else:
-            entry["type"] = "unknown"
-            entry["id"] = getattr(target, "id", None)
-        result.append(entry)
-    return result
-
-
-def _serialize_role(role: discord.Role) -> dict[str, Any]:
-    return {
-        "name": role.name,
-        "color": role.color.value,
-        "hoist": role.hoist,
-        "mentionable": role.mentionable,
-        "permissions": role.permissions.value,
-        "position": role.position,
-        "managed": role.managed,
-        "id": role.id,
-    }
-
-
-def _serialize_channel(channel: discord.abc.GuildChannel) -> dict[str, Any]:
-    data: dict[str, Any] = {
-        "name": channel.name,
-        "type": str(channel.type),
-        "position": channel.position,
-        "category": channel.category.name if channel.category else None,
-        "overwrites": _serialize_overwrites(channel.overwrites, channel.guild),
-    }
-
-    if isinstance(channel, discord.TextChannel):
-        data["topic"] = channel.topic
-        data["nsfw"] = channel.nsfw
-        data["slowmode_delay"] = channel.slowmode_delay
-    elif isinstance(channel, discord.VoiceChannel):
-        data["bitrate"] = channel.bitrate
-        data["user_limit"] = channel.user_limit
-    elif isinstance(channel, discord.ForumChannel):
-        data["topic"] = channel.topic
-        data["nsfw"] = channel.nsfw
-        data["slowmode_delay"] = channel.slowmode_delay
-
-    return data
-
-
-async def save_guild(guild: discord.Guild, save_name: str) -> Path:
-    ensure_saves_dir()
+async def save_guild(guild: discord.Guild, save_name: str) -> dict:
     safe_name = "".join(c for c in save_name if c.isalnum() or c in ("-", "_")).strip()
     if not safe_name:
-        raise ValueError("Numele fisierului nu este valid.")
+        raise ValueError("Numele fișierului nu este valid!")
 
     roles = [
-        _serialize_role(role)
+        {
+            "name": role.name,
+            "color": role.color.value,
+            "hoist": role.hoist,
+            "mentionable": role.mentionable,
+            "permissions": role.permissions.value,
+            "position": role.position,
+            "managed": role.managed,
+            "id": role.id,
+        }
         for role in sorted(guild.roles, key=lambda r: r.position)
         if not role.is_default() and not role.managed
     ]
@@ -127,62 +68,86 @@ async def save_guild(guild: discord.Guild, save_name: str) -> Path:
         "channels": channels,
     }
 
-    file_path = SAVES_DIR / f"{safe_name}.json"
-    file_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    return file_path
+    # Salvează în Supabase
+    try:
+        # Dacă există deja backup-ul cu același nume, îl actualizăm; altfel, îl creăm
+        existing = supabase.table("backups").select("id").eq("save_name", safe_name).execute()
+        if existing.data:
+            supabase.table("backups").update({"data": payload}).eq("save_name", safe_name).execute()
+        else:
+            supabase.table("backups").insert({"save_name": safe_name, "data": payload}).execute()
+        return {"save_name": safe_name, "source_guild": payload["source_guild"]}
+    except Exception as e:
+        raise ValueError(f"Eroare la salvare în Supabase: {e}")
 
 
-def _resolve_save_path(filename: str) -> Path:
-    ensure_saves_dir()
-    name = filename.strip()
-    if not name:
-        raise ValueError("Trebuie sa specifici un nume de fisier.")
-
-    if not name.endswith(".json"):
-        name = f"{name}.json"
-
-    file_path = (SAVES_DIR / name).resolve()
-    if file_path.parent != SAVES_DIR.resolve():
-        raise ValueError("Calea fisierului nu este valida.")
-
-    if not file_path.exists():
-        raise FileNotFoundError(f"Fisierul `{name}` nu exista in folderul `saves`.")
-
-    return file_path
+def load_save_data(save_name: str) -> dict:
+    safe_name = "".join(c for c in save_name if c.isalnum() or c in ("-", "_")).strip()
+    response = supabase.table("backups").select("data").eq("save_name", safe_name).execute()
+    if not response.data:
+        raise FileNotFoundError(f"Backup-ul `{safe_name}` nu există!")
+    return response.data[0]["data"]
 
 
-def load_save_data(filename: str) -> dict[str, Any]:
-    file_path = _resolve_save_path(filename)
-    return json.loads(file_path.read_text(encoding="utf-8"))
+def list_saves() -> list[str]:
+    response = supabase.table("backups").select("save_name, created_at").order("created_at", desc=True).execute()
+    return [f"- `{item['save_name']}` ({item['created_at'][:16]})" for item in response.data]
 
 
-def _build_overwrites(
+# Restul funcțiilor (pentru serializare, wipe, apply) rămân la fel
+def _overwrite_to_dict(overwrite: discord.PermissionOverwrite) -> dict[str, bool | None]:
+    data: dict[str, bool | None] = {}
+    for name, value in overwrite:
+        data[name] = value
+    return data
+
+
+def _serialize_overwrites(
+    overwrites: dict[Any, discord.PermissionOverwrite],
     guild: discord.Guild,
-    entries: list[dict[str, Any]],
-    role_map: dict[str, discord.Role],
-) -> dict[discord.Role | discord.Member, discord.PermissionOverwrite]:
-    overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {}
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for target, overwrite in overwrites.items():
+        entry: dict[str, Any] = {
+            "allow": _overwrite_to_dict(overwrite),
+        }
+        if isinstance(target, discord.Role):
+            entry["type"] = "role"
+            entry["name"] = target.name
+            entry["id"] = target.id
+        elif isinstance(target, discord.Member):
+            entry["type"] = "member"
+            entry["name"] = str(target)
+            entry["id"] = target.id
+        else:
+            entry["type"] = "unknown"
+            entry["id"] = getattr(target, "id", None)
+        result.append(entry)
+    return result
 
-    for entry in entries:
-        target_type = entry.get("type")
-        allow = entry.get("allow", {})
-        overwrite = discord.PermissionOverwrite(**allow)
 
-        if target_type == "role":
-            role_name = entry.get("name")
-            role = role_map.get(role_name)
-            if role is None and entry.get("id"):
-                role = guild.get_role(entry["id"])
-            if role is not None:
-                overwrites[role] = overwrite
-        elif target_type == "member":
-            member_id = entry.get("id")
-            if member_id:
-                member = guild.get_member(member_id)
-                if member is not None:
-                    overwrites[member] = overwrite
+def _serialize_channel(channel: discord.abc.GuildChannel) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "name": channel.name,
+        "type": str(channel.type),
+        "position": channel.position,
+        "category": channel.category.name if channel.category else None,
+        "overwrites": _serialize_overwrites(channel.overwrites, channel.guild),
+    }
 
-    return overwrites
+    if isinstance(channel, discord.TextChannel):
+        data["topic"] = channel.topic
+        data["nsfw"] = channel.nsfw
+        data["slowmode_delay"] = channel.slowmode_delay
+    elif isinstance(channel, discord.VoiceChannel):
+        data["bitrate"] = channel.bitrate
+        data["user_limit"] = channel.user_limit
+    elif isinstance(channel, discord.ForumChannel):
+        data["topic"] = channel.topic
+        data["nsfw"] = channel.nsfw
+        data["slowmode_delay"] = channel.slowmode_delay
+
+    return data
 
 
 async def wipe_guild(guild: discord.Guild) -> dict[str, int]:
@@ -338,3 +303,32 @@ async def apply_save_to_guild(guild: discord.Guild, data: dict[str, Any]) -> dic
         "categories": created_categories,
         "channels": created_channels,
     }
+
+
+def _build_overwrites(
+    guild: discord.Guild,
+    entries: list[dict[str, Any]],
+    role_map: dict[str, discord.Role],
+) -> dict[discord.Role | discord.Member, discord.PermissionOverwrite]:
+    overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {}
+
+    for entry in entries:
+        target_type = entry.get("type")
+        allow = entry.get("allow", {})
+        overwrite = discord.PermissionOverwrite(**allow)
+
+        if target_type == "role":
+            role_name = entry.get("name")
+            role = role_map.get(role_name)
+            if role is None and entry.get("id"):
+                role = guild.get_role(entry["id"])
+            if role is not None:
+                overwrites[role] = overwrite
+        elif target_type == "member":
+            member_id = entry.get("id")
+            if member_id:
+                member = guild.get_member(member_id)
+                if member is not None:
+                    overwrites[member] = overwrite
+
+    return overwrites
