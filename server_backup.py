@@ -10,10 +10,25 @@ import os
 
 load_dotenv()
 
-# Conectare la Supabase
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Conectare la Supabase (lazily initialized)
+_supabase_client = None
+
+def get_supabase_client():
+    global _supabase_client
+    if _supabase_client is None:
+        SUPABASE_URL = os.getenv("SUPABASE_URL")
+        SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+        
+        print(f"DEBUG SUPABASE_URL: {'Setat' if SUPABASE_URL else 'Lipseste'}")
+        print(f"DEBUG SUPABASE_KEY: {'Setat' if SUPABASE_KEY else 'Lipseste'}")
+        
+        if not SUPABASE_URL:
+            raise SystemExit("EROARE: SUPABASE_URL lipsește! Adaugă-l în Render Environment Variables!")
+        if not SUPABASE_KEY:
+            raise SystemExit("EROARE: SUPABASE_KEY lipsește! Adaugă-l în Render Environment Variables!")
+        
+        _supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _supabase_client
 
 
 async def save_guild(guild: discord.Guild, save_name: str) -> dict:
@@ -70,6 +85,7 @@ async def save_guild(guild: discord.Guild, save_name: str) -> dict:
 
     # Salvează în Supabase
     try:
+        supabase = get_supabase_client()
         # Dacă există deja backup-ul cu același nume, îl actualizăm; altfel, îl creăm
         existing = supabase.table("backups").select("id").eq("save_name", safe_name).execute()
         if existing.data:
@@ -83,6 +99,7 @@ async def save_guild(guild: discord.Guild, save_name: str) -> dict:
 
 def load_save_data(save_name: str) -> dict:
     safe_name = "".join(c for c in save_name if c.isalnum() or c in ("-", "_")).strip()
+    supabase = get_supabase_client()
     response = supabase.table("backups").select("data").eq("save_name", safe_name).execute()
     if not response.data:
         raise FileNotFoundError(f"Backup-ul `{safe_name}` nu există!")
@@ -90,6 +107,7 @@ def load_save_data(save_name: str) -> dict:
 
 
 def list_saves() -> list[str]:
+    supabase = get_supabase_client()
     response = supabase.table("backups").select("save_name, created_at").order("created_at", desc=True).execute()
     return [f"- `{item['save_name']}` ({item['created_at'][:16]})" for item in response.data]
 
