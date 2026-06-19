@@ -14,9 +14,41 @@ from server_backup import apply_save_to_guild, load_save_data, save_guild, wipe_
 
 load_dotenv()
 
-USER_TOKEN = os.getenv("DISCORD_USER_TOKEN")
+TOKENS_FILE = "tokens.json"
+CURRENT_TOKEN_FILE = "current_token.txt"
+
+# Încărcăm token-urile
+def load_tokens():
+    if not os.path.exists(TOKENS_FILE):
+        return {}
+    try:
+        with open(TOKENS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_tokens(tokens):
+    with open(TOKENS_FILE, "w", encoding="utf-8") as f:
+        json.dump(tokens, f, indent=2)
+
+def get_current_token():
+    # Încercăm mai întâi din current_token.txt
+    if os.path.exists(CURRENT_TOKEN_FILE):
+        try:
+            with open(CURRENT_TOKEN_FILE, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception:
+            pass
+    # Dacă nu, din .env
+    token = os.getenv("DISCORD_USER_TOKEN")
+    if token:
+        return token.strip()
+    return None
+
+tokens = load_tokens()
+USER_TOKEN = get_current_token()
 if not USER_TOKEN:
-    raise SystemExit("❌ Eroare: Lipseste DISCORD_USER_TOKEN in fisierul .env!")
+    raise SystemExit("❌ Eroare: Lipseste tokenul! Adauga-l in .env sau foloseste !add_token!")
 
 bot = commands.Bot(
     command_prefix="!",
@@ -234,6 +266,70 @@ async def nuke_command(ctx: commands.Context) -> None:
                 )
                 break
 
+
+@bot.command(name="tokens")
+async def list_tokens_command(ctx: commands.Context) -> None:
+    if ctx.author != bot.user:
+        await ctx.send("❌ Doar proprietarul contului poate folosi aceasta comanda!")
+        return
+    tokens = load_tokens()
+    if not tokens:
+        await ctx.send("⚠️ Nu exista niciun token salvat!")
+        return
+    current = get_current_token()
+    msg = "📋 Token-uri disponibile:\n"
+    for name, token in tokens.items():
+        if token == current:
+            msg += f"✅ **{name}** (curent)\n"
+        else:
+            msg += f"   {name}\n"
+    await ctx.send(msg)
+
+@bot.command(name="add_token")
+async def add_token_command(ctx: commands.Context, name: str, *, token: str) -> None:
+    if ctx.author != bot.user:
+        await ctx.send("❌ Doar proprietarul contului poate folosi aceasta comanda!")
+        return
+    if not name.strip() or not token.strip():
+        await ctx.send("⚠️ Folosește: `!add_token nume token`")
+        return
+    tokens = load_tokens()
+    tokens[name.strip()] = token.strip()
+    save_tokens(tokens)
+    await ctx.send(f"✅ Tokenul `{name.strip()}` a fost adaugat!")
+
+@bot.command(name="use_token")
+async def use_token_command(ctx: commands.Context, name: str) -> None:
+    if ctx.author != bot.user:
+        await ctx.send("❌ Doar proprietarul contului poate folosi aceasta comanda!")
+        return
+    if not name.strip():
+        await ctx.send("⚠️ Folosește: `!use_token nume`")
+        return
+    tokens = load_tokens()
+    if name.strip() not in tokens:
+        await ctx.send(f"❌ Tokenul `{name.strip()}` nu exista!")
+        return
+    with open(CURRENT_TOKEN_FILE, "w", encoding="utf-8") as f:
+        f.write(tokens[name.strip()])
+    await ctx.send(f"✅ Setez tokenul la `{name.strip()}`! Repornesc botul...")
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+@bot.command(name="remove_token")
+async def remove_token_command(ctx: commands.Context, name: str) -> None:
+    if ctx.author != bot.user:
+        await ctx.send("❌ Doar proprietarul contului poate folosi aceasta comanda!")
+        return
+    if not name.strip():
+        await ctx.send("⚠️ Folosește: `!remove_token nume`")
+        return
+    tokens = load_tokens()
+    if name.strip() not in tokens:
+        await ctx.send(f"❌ Tokenul `{name.strip()}` nu exista!")
+        return
+    del tokens[name.strip()]
+    save_tokens(tokens)
+    await ctx.send(f"✅ Tokenul `{name.strip()}` a fost sters!")
 
 @bot.command(name="token")
 async def set_token_command(ctx: commands.Context, *, new_token: str) -> None:
