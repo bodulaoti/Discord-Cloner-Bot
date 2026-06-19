@@ -21,9 +21,13 @@ if not USER_TOKEN:
     raise SystemExit("❌ Eroare: Lipseste DISCORD_USER_TOKEN in fisierul .env!")
 
 # Configurăm self-botul
+intents = discord.Intents.default()
+intents.message_content = True
+
 bot = commands.Bot(
     command_prefix="!",
-    self_bot=True
+    self_bot=True,
+    intents=intents
 )
 
 
