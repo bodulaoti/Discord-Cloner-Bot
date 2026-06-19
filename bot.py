@@ -1,4 +1,5 @@
 import os
+import json
 import traceback
 import re
 import sys
@@ -86,22 +87,24 @@ async def save_command(ctx: commands.Context, save_name: str) -> None:
     status = await ctx.send("📦 Salvez structura serverului...")
     try:
         file_path = await save_guild(ctx.guild, save_name.strip())
+        # Trimitem fișierul ca attachment pe Discord
+        file = discord.File(file_path, filename=file_path.name)
+        await ctx.send(
+            content=(
+                f"✅ Serverul **{ctx.guild.name}** a fost salvat cu succes!\n"
+                f"👥 Roluri salvate: {len([r for r in ctx.guild.roles if not r.is_default() and not r.managed])}\n"
+                f"📂 Categorii: {len(ctx.guild.categories)}\n"
+                f"💬 Canale: {len([c for c in ctx.guild.channels if not isinstance(c, discord.CategoryChannel)])}"
+            ),
+            file=file
+        )
+        await status.delete()
     except ValueError as exc:
         await status.edit(content=str(exc))
         return
     except Exception as exc:
         await status.edit(content=f"❌ Eroare la salvare: {exc}")
         return
-
-    await status.edit(
-        content=(
-            f"✅ Serverul **{ctx.guild.name}** a fost salvat cu succes!\n"
-            f"📁 Nume fișier: `{file_path.name}`\n"
-            f"👥 Roluri salvate: {len([r for r in ctx.guild.roles if not r.is_default() and not r.managed])}\n"
-            f"📂 Categorii: {len(ctx.guild.categories)}\n"
-            f"💬 Canale: {len([c for c in ctx.guild.channels if not isinstance(c, discord.CategoryChannel)])}"
-        )
-    )
 
 
 async def _notify_user(ctx: commands.Context, content: str) -> None:
@@ -113,7 +116,7 @@ async def _notify_user(ctx: commands.Context, content: str) -> None:
 
 
 @bot.command(name="load")
-async def load_command(ctx: commands.Context, filename: str) -> None:
+async def load_command(ctx: commands.Context, filename: str = None) -> None:
     if ctx.guild is None:
         await ctx.send("⚠️ Această comandă funcționează doar pe un server!")
         return
@@ -122,13 +125,36 @@ async def load_command(ctx: commands.Context, filename: str) -> None:
         await ctx.send("❌ Ai nevoie de permisiunea **Administrator** pentru `!load`!")
         return
 
-    if not filename.strip():
-        await ctx.send("⚠️ Folosește: `!load nume_backup`")
+    data = None
+    # Verificăm dacă există un attachment în mesaj
+    if ctx.message.attachments:
+        attachment = ctx.message.attachments[0]
+        if not attachment.filename.endswith(".json"):
+            await ctx.send("⚠️ Te rog să atașezi un fișier JSON de backup!")
+            return
+        # Descărcăm fișierul din attachment
+        file_content = await attachment.read()
+        try:
+            data = json.loads(file_content.decode("utf-8"))
+        except Exception as e:
+            await ctx.send(f"❌ Fișierul JSON este invalid! Eroare: {e}")
+            return
+    elif filename:
+        try:
+            data = load_save_data(filename.strip())
+        except FileNotFoundError as exc:
+            await ctx.send(str(exc))
+            return
+        except ValueError as exc:
+            await ctx.send(str(exc))
+            return
+    else:
+        await ctx.send("⚠️ Folosește: `!load nume_backup` sau atașează un fișier JSON!")
         return
 
     status = await ctx.send("⚠️ ATENȚIE! Tot conținutul serverului va fi ȘTERS! Continuăm?")
+
     try:
-        data = load_save_data(filename.strip())
         await status.edit(content="🗑️ Ștergem canalele și rolurile vechi...")
         wipe_result = await wipe_guild(ctx.guild)
         try:
@@ -136,12 +162,6 @@ async def load_command(ctx: commands.Context, filename: str) -> None:
         except discord.NotFound:
             pass
         result = await apply_save_to_guild(ctx.guild, data)
-    except FileNotFoundError as exc:
-        await status.edit(content=str(exc))
-        return
-    except ValueError as exc:
-        await status.edit(content=str(exc))
-        return
     except discord.Forbidden:
         message = (
             "❌ Nu ai permisiuni suficiente!\n"
