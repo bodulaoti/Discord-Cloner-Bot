@@ -32,10 +32,13 @@ def get_supabase_client():
 
 
 async def save_guild(guild: discord.Guild, save_name: str) -> dict:
+    print("[DEBUG] Începem salvare...")
     safe_name = "".join(c for c in save_name if c.isalnum() or c in ("-", "_")).strip()
+    print(f"[DEBUG] Nume sigur: {safe_name}")
     if not safe_name:
         raise ValueError("Numele fișierului nu este valid!")
 
+    print("[DEBUG] Colectăm roluri...")
     roles = [
         {
             "name": role.name,
@@ -50,26 +53,35 @@ async def save_guild(guild: discord.Guild, save_name: str) -> dict:
         for role in sorted(guild.roles, key=lambda r: r.position)
         if not role.is_default() and not role.managed
     ]
+    print(f"[DEBUG] {len(roles)} roluri colectate")
 
+    print("[DEBUG] Colectăm categorii...")
     categories = [
         _serialize_channel(category)
         for category in sorted(guild.categories, key=lambda c: c.position)
     ]
+    print(f"[DEBUG] {len(categories)} categorii colectate")
 
+    print("[DEBUG] Colectăm canale...")
     channels = [
         _serialize_channel(channel)
         for channel in sorted(guild.channels, key=lambda c: c.position)
         if not isinstance(channel, discord.CategoryChannel)
     ]
+    print(f"[DEBUG] {len(channels)} canale colectate")
 
     icon_base64 = None
     if guild.icon:
+        print("[DEBUG] Colectăm iconiță...")
         try:
             icon_bytes = await guild.icon.read()
             icon_base64 = base64.b64encode(icon_bytes).decode("utf-8")
-        except Exception:
+            print("[DEBUG] Iconiță colectată")
+        except Exception as e:
+            print(f"[DEBUG] Eroare iconiță: {e}")
             icon_base64 = None
 
+    print("[DEBUG] Construim payload...")
     payload = {
         "save_name": safe_name,
         "saved_at": datetime.now(timezone.utc).isoformat(),
@@ -82,18 +94,30 @@ async def save_guild(guild: discord.Guild, save_name: str) -> dict:
         "categories": categories,
         "channels": channels,
     }
+    print(f"[DEBUG] Payload gata, lungime: {len(str(payload))}")
 
     # Salvează în Supabase
+    print("[DEBUG] Începem salvare în Supabase...")
     try:
         supabase = get_supabase_client()
+        print("[DEBUG] Am luat clientul Supabase")
         # Dacă există deja backup-ul cu același nume, îl actualizăm; altfel, îl creăm
+        print("[DEBUG] Verificăm dacă există backup...")
         existing = supabase.table("backups").select("id").eq("save_name", safe_name).execute()
+        print(f"[DEBUG] Rezultat verificare: {existing}")
         if existing.data:
+            print("[DEBUG] Actualizăm backup existent...")
             supabase.table("backups").update({"data": payload}).eq("save_name", safe_name).execute()
+            print("[DEBUG] Backup actualizat")
         else:
+            print("[DEBUG] Creăm backup nou...")
             supabase.table("backups").insert({"save_name": safe_name, "data": payload}).execute()
+            print("[DEBUG] Backup creat")
         return {"save_name": safe_name, "source_guild": payload["source_guild"]}
     except Exception as e:
+        print(f"[DEBUG] Eroare la salvare: {e}")
+        import traceback
+        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
         raise ValueError(f"Eroare la salvare în Supabase: {e}")
 
 
